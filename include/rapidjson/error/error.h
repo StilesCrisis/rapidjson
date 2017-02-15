@@ -66,7 +66,8 @@ enum ParseErrorCode {
 
     kParseErrorDocumentEmpty,                   //!< The document is empty.
     kParseErrorDocumentRootNotSingular,         //!< The document root must not follow by other values.
-
+    kParseErrorDocumentTruncated,               //!< The stream ran out of data mid-document. (Only generated when resumable parsing is on)
+    
     kParseErrorValueInvalid,                    //!< Invalid value.
 
     kParseErrorObjectMissName,                  //!< Missing a name for object member.
@@ -129,6 +130,17 @@ public:
     //! Update error code and offset.
     void Set(ParseErrorCode code, size_t offset = 0) { code_ = code; offset_ = offset; }
 
+    bool IsResumable() const {
+        switch (code_) {
+            case kParseErrorNone:
+            case kParseErrorDocumentEmpty:
+            case kParseErrorDocumentTruncated:
+                return true;
+
+            default:
+                return false;
+        }
+    }
 private:
     ParseErrorCode code_;
     size_t offset_;

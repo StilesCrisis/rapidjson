@@ -1023,6 +1023,7 @@ public:
     Ch Peek() const { return *src_; }
     Ch Take() { return *src_++; }
     size_t Tell() const { return static_cast<size_t>(src_ - head_); }
+    bool Seek(size_t offset) { src_ = head_ + offset; return true; }
 
     Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
     void Put(Ch) { RAPIDJSON_ASSERT(false); }
@@ -1079,6 +1080,9 @@ public:
     }
 
     size_t Tell() const { return static_cast<size_t>(is_.tellg()); }
+    bool Seek(size_t offset) {
+        return -1 != is_.rdbuf()->pubseekpos(static_cast<std::istream::streamoff>(offset));
+    }
 
     Ch* PutBegin() { assert(false); return 0; }
     void Put(Ch) { assert(false); }
@@ -1222,12 +1226,12 @@ TEST(Reader, IterativeParsing_General) {
         StringStream is("[1, {\"k\": [1, 2]}, null, false, true, \"string\", 1.2]");
         Reader reader;
         IterativeParsingReaderHandler<> handler;
-
+        
         ParseResult r = reader.Parse<kParseIterativeFlag>(is, handler);
-
+        
         EXPECT_FALSE(r.IsError());
         EXPECT_FALSE(reader.HasParseError());
-
+        
         uint32_t e[] = {
             handler.LOG_STARTARRAY,
             handler.LOG_INT,
@@ -1245,9 +1249,60 @@ TEST(Reader, IterativeParsing_General) {
             handler.LOG_DOUBLE,
             handler.LOG_ENDARRAY | 7
         };
-
+        
         EXPECT_EQ(sizeof(e) / sizeof(int), handler.LogCount);
+        
+        for (size_t i = 0; i < handler.LogCount; ++i) {
+            EXPECT_EQ(e[i], handler.Logs[i]) << "i = " << i;
+        }
+    }
+}
 
+
+TEST(Reader, IterativeParsing_Resume) {
+    {
+        const char* json = "[123, {\"key\": [12, 23]}, null, false, true, \"string\", \"s\", 1.2]";
+        std::stringstream stream;
+        IStreamWrapper is(stream);
+
+        IterativeParsingReaderHandler<> handler;
+        Reader reader;
+        reader.IterativeParseInit();
+
+        while (!reader.IterativeParseComplete()) {
+            if (!reader.IterativeParseNext<kParseResumableFlag>(is, handler)) {
+                EXPECT_TRUE(*json != '\0');
+                if (*json == '\0') {
+                    break;
+                }
+                
+                stream.put(*json++);
+                reader.IterativeParseResume();
+            }
+        }
+        
+        EXPECT_FALSE(reader.HasParseError());
+        
+        uint32_t e[] = {
+            handler.LOG_STARTARRAY,
+            handler.LOG_INT,
+            handler.LOG_STARTOBJECT,
+            handler.LOG_KEY,
+            handler.LOG_STARTARRAY,
+            handler.LOG_INT,
+            handler.LOG_INT,
+            handler.LOG_ENDARRAY | 2,
+            handler.LOG_ENDOBJECT | 1,
+            handler.LOG_NULL,
+            handler.LOG_BOOL,
+            handler.LOG_BOOL,
+            handler.LOG_STRING,
+            handler.LOG_DOUBLE,
+            handler.LOG_ENDARRAY | 8
+        };
+        
+        EXPECT_EQ(sizeof(e) / sizeof(int), handler.LogCount);
+        
         for (size_t i = 0; i < handler.LogCount; ++i) {
             EXPECT_EQ(e[i], handler.Logs[i]) << "i = " << i;
         }

@@ -48,6 +48,7 @@ public:
     Ch Peek() const { return current_; }
     Ch Take() { Ch c = current_; current_ = Encoding::Take(is_); return c; }
     size_t Tell() const { return is_.Tell(); }
+    bool Seek(size_t offset) { return is_.Seek(offset); }
 
     // Not implemented
     void Put(Ch) { RAPIDJSON_ASSERT(false); }
@@ -77,6 +78,7 @@ public:
     Ch Peek() const { return is_.Peek(); }
     Ch Take() { return is_.Take(); }
     size_t Tell() const { return is_.Tell(); }
+    bool Seek(size_t offset) { return is_.Seek(offset); }
 
     // Not implemented
     void Put(Ch) {}
@@ -114,6 +116,7 @@ public:
     Ch Peek() const { RAPIDJSON_ASSERT(false); return 0;}
     Ch Take() { RAPIDJSON_ASSERT(false); return 0;}
     size_t Tell() const { RAPIDJSON_ASSERT(false);  return 0; }
+    bool Seek(size_t) { RAPIDJSON_ASSERT(false); return false; }
     Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
     size_t PutEnd(Ch*) { RAPIDJSON_ASSERT(false); return 0; }
 
@@ -156,6 +159,7 @@ public:
     Ch Peek() const { return current_; }
     Ch Take() { Ch c = current_; current_ = takeFunc_(*is_); return c; }
     size_t Tell() const { return is_->Tell(); }
+    bool Seek(size_t offset) { return is_->Seek(offset); }
 
     // Not implemented
     void Put(Ch) { RAPIDJSON_ASSERT(false); }
@@ -264,6 +268,7 @@ public:
     Ch Peek() const { RAPIDJSON_ASSERT(false); return 0;}
     Ch Take() { RAPIDJSON_ASSERT(false); return 0;}
     size_t Tell() const { RAPIDJSON_ASSERT(false); return 0; }
+    bool Seek(size_t) { RAPIDJSON_ASSERT(false); return false; }
     Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
     size_t PutEnd(Ch*) { RAPIDJSON_ASSERT(false); return 0; }
 

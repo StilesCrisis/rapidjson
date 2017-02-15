@@ -14,6 +14,7 @@ set(EXAMPLES
     parsebyparts
     pretty
     prettyauto
+    resumableparse
     schemavalidator
     serialize
     simpledom

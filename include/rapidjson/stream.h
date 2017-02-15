@@ -30,20 +30,27 @@ RAPIDJSON_NAMESPACE_BEGIN
     For read-only stream, no need to implement PutBegin(), Put(), Flush() and PutEnd().
 
     For write-only stream, only need to implement Put() and Flush().
-
+ 
+    Seek() is only used to support resumable parsing. It will only seek back to the
+    beginning of an incomplete token.
+ 
 \code
 concept Stream {
     typename Ch;    //!< Character type of the stream.
 
     //! Read the current character from stream without moving the read cursor.
     Ch Peek() const;
-
+ 
     //! Read the current character from stream and moving the read cursor to next character.
     Ch Take();
 
     //! Get the current read cursor.
     //! \return Number of characters read from start.
     size_t Tell();
+
+    //! Seek the read cursor.
+    //! \return Offset in the stream to seek to (always backwards).
+    void Seek(size_t offset)
 
     //! Begin writing operation at the current read pointer.
     //! \return The begin writer pointer.
@@ -115,7 +122,8 @@ struct GenericStringStream {
     Ch Peek() const { return *src_; }
     Ch Take() { return *src_++; }
     size_t Tell() const { return static_cast<size_t>(src_ - head_); }
-
+    void Seek(size_t offset) { src_ = head_ + offset; }
+    
     Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
     void Put(Ch) { RAPIDJSON_ASSERT(false); }
     void Flush() { RAPIDJSON_ASSERT(false); }
@@ -150,6 +158,7 @@ struct GenericInsituStringStream {
     Ch Peek() { return *src_; }
     Ch Take() { return *src_++; }
     size_t Tell() { return static_cast<size_t>(src_ - head_); }
+    void Seek(size_t offset) { src_ = head_ + offset; }
 
     // Write
     void Put(Ch c) { RAPIDJSON_ASSERT(dst_ != 0); *dst_++ = c; }

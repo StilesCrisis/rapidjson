@@ -50,6 +50,20 @@ public:
     Ch Peek() const { return *current_; }
     Ch Take() { Ch c = *current_; Read(); return c; }
     size_t Tell() const { return count_ + static_cast<size_t>(current_ - buffer_); }
+    bool Seek(size_t offset) {
+        RAPIDJSON_ASSERT(offset <= LONG_MAX);
+        if (!fseek(fp_, static_cast<long>(offset), SEEK_SET)) {
+            eof_ = true;
+            return false;
+        }
+        count_ = offset;
+        readCount_ = 0;
+        current_ = buffer_;
+        bufferLast_ = 0;
+        eof_ = false;
+        Read();
+        return true;
+    }
 
     // Not implemented
     void Put(Ch) { RAPIDJSON_ASSERT(false); }

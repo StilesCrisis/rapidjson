@@ -58,6 +58,7 @@ public:
     // Not implemented
     char Peek() const { RAPIDJSON_ASSERT(false); return 0; }
     char Take() { RAPIDJSON_ASSERT(false); return 0; }
+    bool Seek(size_t) { RAPIDJSON_ASSERT(false); return 0; }
     size_t Tell() const { RAPIDJSON_ASSERT(false); return 0; }
     char* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
     size_t PutEnd(char*) { RAPIDJSON_ASSERT(false); return 0; }

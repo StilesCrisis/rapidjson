@@ -45,6 +45,7 @@ struct MemoryStream {
     Ch Peek() const { return RAPIDJSON_UNLIKELY(src_ == end_) ? '\0' : *src_; }
     Ch Take() { return RAPIDJSON_UNLIKELY(src_ == end_) ? '\0' : *src_++; }
     size_t Tell() const { return static_cast<size_t>(src_ - begin_); }
+    bool Seek(size_t offset) { src_ = begin_ + offset; RAPIDJSON_ASSERT(src_ < end_); return true; }
 
     Ch* PutBegin() { RAPIDJSON_ASSERT(false); return 0; }
     void Put(Ch) { RAPIDJSON_ASSERT(false); }

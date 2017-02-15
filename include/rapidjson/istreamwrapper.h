@@ -67,6 +67,10 @@ public:
             return '\0';
     }
 
+    bool Seek(size_t offset) {
+        return -1 != stream_.rdbuf()->pubseekpos(static_cast<typename StreamType::streamoff>(offset));
+    }
+    
     // tellg() may return -1 when failed. So we count by ourself.
     size_t Tell() const { return count_; }
 

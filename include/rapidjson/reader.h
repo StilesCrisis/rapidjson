@@ -153,6 +153,7 @@ enum ParseFlag {
     kParseNumbersAsStringsFlag = 64,    //!< Parse all numbers (ints/doubles) as strings.
     kParseTrailingCommasFlag = 128, //!< Allow trailing commas at the end of objects and arrays.
     kParseNanAndInfFlag = 256,      //!< Allow parsing NaN, Inf, Infinity, -Inf and -Infinity as doubles.
+    kParseResumableFlag = 512,      //!< Allow iterative parser to support resuming.
     kParseDefaultFlags = RAPIDJSON_PARSE_DEFAULT_FLAGS  //!< Default parse flags. Can be customized by defining RAPIDJSON_PARSE_DEFAULT_FLAGS
 };
 
@@ -457,7 +458,7 @@ public:
     /*! \param stackAllocator Optional allocator for allocating stack memory. (Only use for non-destructive parsing)
         \param stackCapacity stack capacity in bytes for storing a single decoded string.  (Only use for non-destructive parsing)
     */
-    GenericReader(StackAllocator* stackAllocator = 0, size_t stackCapacity = kDefaultStackCapacity) : stack_(stackAllocator, stackCapacity), parseResult_() {}
+    GenericReader(StackAllocator* stackAllocator = 0, size_t stackCapacity = kDefaultStackCapacity) : stack_(stackAllocator, stackCapacity), parseResult_(), state_(IterativeParsingStartState) {}
 
     //! Parse JSON text.
     /*! \tparam parseFlags Combination of \ref ParseFlag.
@@ -518,6 +519,7 @@ public:
      */
     void IterativeParseInit() {
         parseResult_.Clear();
+        stack_.Clear();
         state_ = IterativeParsingStartState;
     }
     
@@ -573,8 +575,6 @@ public:
         }
         
         // We reached the end of file.
-        stack_.Clear();
-
         if (state_ != IterativeParsingFinishState) {
             HandleError(state_, is);
             return false;
@@ -588,6 +588,17 @@ public:
      */
     RAPIDJSON_FORCEINLINE bool IterativeParseComplete() {
         return IsIterativeParsingCompleteState(state_);
+    }
+
+    //! If resumable token-by-token parsing failed because the stream ended early,
+    /*! bring the parser back to a usable state by clearing its error state.
+     */
+    bool IterativeParseResume() {
+        if (!parseResult_.IsResumable())
+            return false;
+        
+        parseResult_.Clear();
+        return true;
     }
 
     //! Whether a parse error has occured in the last parsing.
@@ -764,43 +775,82 @@ private:
         }
     }
 
+    template<unsigned parseFlags, typename InputStream>
+    void RecoverResumableInputStream(InputStream& is, size_t amount) {
+        if (parseFlags & kParseResumableFlag) {
+            is.Seek(is.Tell() - amount);
+        }
+    }
+
+    template<char Ch0, char Ch1, char Ch2, char Ch3, char Ch4, unsigned parseFlags, ParseErrorCode errorInvalid, typename InputStream>
+    RAPIDJSON_FORCEINLINE void ConsumeWord(InputStream& is) {
+        if (Ch0 < 0) {
+            RAPIDJSON_ASSERT(is.Peek() == -Ch0);
+            is.Take();
+        }
+        
+        size_t rewindAmount;
+        if (Ch0 <= 0 || RAPIDJSON_LIKELY(Consume(is, Ch0))) {
+            if (Ch1 == 0 || RAPIDJSON_LIKELY(Consume(is, Ch1))) {
+                if (Ch2 == 0 || RAPIDJSON_LIKELY(Consume(is, Ch2))) {
+                    if (Ch3 == 0 || RAPIDJSON_LIKELY(Consume(is, Ch3))) {
+                        if (Ch4 == 0 || RAPIDJSON_LIKELY(Consume(is, Ch4))) {
+                            return;
+                        }
+                        else {
+                            rewindAmount = 4;
+                        }
+                    }
+                    else {
+                        rewindAmount = 3;
+                    }
+                }
+                else {
+                    rewindAmount = 2;
+                }
+            }
+            else {
+                rewindAmount = 1;
+            }
+        }
+        else {
+            rewindAmount = 0;
+        }
+        
+        if ((parseFlags & kParseResumableFlag) && (is.Peek() == '\0')) {
+            RecoverResumableInputStream<parseFlags>(is, rewindAmount);
+            RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, is.Tell());
+        }
+        else {
+            RAPIDJSON_PARSE_ERROR(errorInvalid, is.Tell());
+        }
+    }
+    
     template<unsigned parseFlags, typename InputStream, typename Handler>
     void ParseNull(InputStream& is, Handler& handler) {
-        RAPIDJSON_ASSERT(is.Peek() == 'n');
-        is.Take();
-
-        if (RAPIDJSON_LIKELY(Consume(is, 'u') && Consume(is, 'l') && Consume(is, 'l'))) {
-            if (RAPIDJSON_UNLIKELY(!handler.Null()))
-                RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
-        }
-        else
-            RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, is.Tell());
+        ConsumeWord<-'n', 'u', 'l', 'l', '\0', parseFlags, kParseErrorValueInvalid>(is);
+        RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
+        
+        if (RAPIDJSON_UNLIKELY(!handler.Null()))
+            RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
     }
 
     template<unsigned parseFlags, typename InputStream, typename Handler>
     void ParseTrue(InputStream& is, Handler& handler) {
-        RAPIDJSON_ASSERT(is.Peek() == 't');
-        is.Take();
+        ConsumeWord<-'t', 'r', 'u', 'e', '\0', parseFlags, kParseErrorValueInvalid>(is);
+        RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
 
-        if (RAPIDJSON_LIKELY(Consume(is, 'r') && Consume(is, 'u') && Consume(is, 'e'))) {
-            if (RAPIDJSON_UNLIKELY(!handler.Bool(true)))
-                RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
-        }
-        else
-            RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, is.Tell());
+        if (RAPIDJSON_UNLIKELY(!handler.Bool(true)))
+            RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
     }
 
     template<unsigned parseFlags, typename InputStream, typename Handler>
     void ParseFalse(InputStream& is, Handler& handler) {
-        RAPIDJSON_ASSERT(is.Peek() == 'f');
-        is.Take();
+        ConsumeWord<-'f', 'a', 'l', 's', 'e', parseFlags, kParseErrorValueInvalid>(is);
+        RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
 
-        if (RAPIDJSON_LIKELY(Consume(is, 'a') && Consume(is, 'l') && Consume(is, 's') && Consume(is, 'e'))) {
-            if (RAPIDJSON_UNLIKELY(!handler.Bool(false)))
-                RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
-        }
-        else
-            RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, is.Tell());
+        if (RAPIDJSON_UNLIKELY(!handler.Bool(false)))
+            RAPIDJSON_PARSE_ERROR(kParseErrorTermination, is.Tell());
     }
 
     template<typename InputStream>
@@ -814,7 +864,7 @@ private:
     }
 
     // Helper function to parse four hexidecimal digits in \uXXXX in ParseString().
-    template<typename InputStream>
+    template<unsigned parseFlags, typename InputStream>
     unsigned ParseHex4(InputStream& is, size_t escapeOffset) {
         unsigned codepoint = 0;
         for (int i = 0; i < 4; i++) {
@@ -828,7 +878,13 @@ private:
             else if (c >= 'a' && c <= 'f')
                 codepoint -= 'a' - 10;
             else {
-                RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorStringUnicodeEscapeInvalidHex, escapeOffset);
+                if ((parseFlags & kParseResumableFlag) && (c == '\0')) {
+                    RecoverResumableInputStream<parseFlags>(is, i);
+                    RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorDocumentTruncated, escapeOffset);
+                }
+                else {
+                    RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorStringUnicodeEscapeInvalidHex, escapeOffset);
+                }
                 RAPIDJSON_PARSE_ERROR_EARLY_RETURN(0);
             }
             is.Take();
@@ -913,6 +969,11 @@ private:
 #undef Z16
 //!@endcond
 
+        size_t startOffset;
+        if (parseFlags & kParseResumableFlag) {
+            startOffset = is.Tell();
+        }
+        
         for (;;) {
             // Scan and copy string before "\\\"" or < 0x20. This is an optional optimzation.
             if (!(parseFlags & kParseValidateEncodingFlag))
@@ -920,7 +981,7 @@ private:
 
             Ch c = is.Peek();
             if (RAPIDJSON_UNLIKELY(c == '\\')) {    // Escape
-                size_t escapeOffset = is.Tell();    // For invalid escaping, report the inital '\\' as error offset
+                size_t escapeOffset = is.Tell();    // For invalid escaping, report the initial '\\' as error offset
                 is.Take();
                 Ch e = is.Peek();
                 if ((sizeof(Ch) == 1 || unsigned(e) < 256) && RAPIDJSON_LIKELY(escape[static_cast<unsigned char>(e)])) {
@@ -929,22 +990,36 @@ private:
                 }
                 else if (RAPIDJSON_LIKELY(e == 'u')) {    // Unicode
                     is.Take();
-                    unsigned codepoint = ParseHex4(is, escapeOffset);
+                    unsigned codepoint = ParseHex4<parseFlags>(is, escapeOffset);
                     RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
+                    
                     if (RAPIDJSON_UNLIKELY(codepoint >= 0xD800 && codepoint <= 0xDBFF)) {
                         // Handle UTF-16 surrogate pair
-                        if (RAPIDJSON_UNLIKELY(!Consume(is, '\\') || !Consume(is, 'u')))
-                            RAPIDJSON_PARSE_ERROR(kParseErrorStringUnicodeSurrogateInvalid, escapeOffset);
-                        unsigned codepoint2 = ParseHex4(is, escapeOffset);
+                        ConsumeWord<'\\', 'u', '\0', '\0', '\0', parseFlags, kParseErrorStringUnicodeSurrogateInvalid>(is);
+                        if (HasParseError()) {
+                            if ((parseFlags & kParseResumableFlag) && parseResult_.IsResumable()) {
+                                // Subtract one from the start offset to account for the open-quote.
+                                is.Seek(startOffset - 1);
+                            }
+                            return;
+                        }
+                        
+                        unsigned codepoint2 = ParseHex4<parseFlags>(is, escapeOffset);
                         RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
+                        
                         if (RAPIDJSON_UNLIKELY(codepoint2 < 0xDC00 || codepoint2 > 0xDFFF))
                             RAPIDJSON_PARSE_ERROR(kParseErrorStringUnicodeSurrogateInvalid, escapeOffset);
                         codepoint = (((codepoint - 0xD800) << 10) | (codepoint2 - 0xDC00)) + 0x10000;
                     }
                     TEncoding::Encode(os, codepoint);
                 }
-                else
+                else if ((parseFlags & kParseResumableFlag) && RAPIDJSON_UNLIKELY(e == '\0')) {
+                    is.Seek(startOffset - 1);
+                    RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, is.Tell());
+                }
+                else {
                     RAPIDJSON_PARSE_ERROR(kParseErrorStringEscapeInvalid, escapeOffset);
+                }
             }
             else if (RAPIDJSON_UNLIKELY(c == '"')) {    // Closing double quote
                 is.Take();
@@ -952,8 +1027,14 @@ private:
                 return;
             }
             else if (RAPIDJSON_UNLIKELY(static_cast<unsigned>(c) < 0x20)) { // RFC 4627: unescaped = %x20-21 / %x23-5B / %x5D-10FFFF
-                if (c == '\0')
+                if (c == '\0') {
+                    if (parseFlags & kParseResumableFlag) {
+                        // Subtract one from the start offset to account for the open-quote.
+                        is.Seek(startOffset - 1);
+                        RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, is.Tell());
+                    }
                     RAPIDJSON_PARSE_ERROR(kParseErrorStringMissQuotationMark, is.Tell());
+                }
                 else
                     RAPIDJSON_PARSE_ERROR(kParseErrorStringEscapeInvalid, is.Tell());
             }
@@ -1147,6 +1228,7 @@ private:
 		  RAPIDJSON_FORCEINLINE void Push(char) {}
 
         size_t Tell() { return is.Tell(); }
+        bool Seek(size_t offset) { return is.Seek(offset); }
         size_t Length() { return 0; }
         const char* Pop() { return 0; }
 
@@ -1248,10 +1330,10 @@ private:
         // Parse NaN or Infinity here
         else if ((parseFlags & kParseNanAndInfFlag) && RAPIDJSON_LIKELY((s.Peek() == 'I' || s.Peek() == 'N'))) {
             useNanOrInf = true;
-            if (RAPIDJSON_LIKELY(Consume(s, 'N') && Consume(s, 'a') && Consume(s, 'N'))) {
+            if (RAPIDJSON_LIKELY(Consume(s, 'N') && Consume(s, 'a') && Consume(s, 'N'))) { // FIXME: will half-consume NaN silently
                 d = std::numeric_limits<double>::quiet_NaN();
             }
-            else if (RAPIDJSON_LIKELY(Consume(s, 'I') && Consume(s, 'n') && Consume(s, 'f'))) {
+            else if (RAPIDJSON_LIKELY(Consume(s, 'I') && Consume(s, 'n') && Consume(s, 'f'))) { // FIXME: will half-consume Inf silently
                 d = (minus ? -std::numeric_limits<double>::infinity() : std::numeric_limits<double>::infinity());
                 if (RAPIDJSON_UNLIKELY(s.Peek() == 'i' && !(Consume(s, 'i') && Consume(s, 'n')
                                                             && Consume(s, 'i') && Consume(s, 't') && Consume(s, 'y'))))
@@ -1260,9 +1342,13 @@ private:
             else
                 RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, s.Tell());
         }
-        else
+        else if ((parseFlags & kParseResumableFlag) && s.Peek() == '\0') {
+            RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, s.Tell());
+        }
+        else {
             RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, s.Tell());
-
+        }
+        
         // Parse 64bit int
         bool useDouble = false;
         if (use64bit) {
@@ -1388,6 +1474,15 @@ private:
                 exp = -exp;
         }
 
+        // In resumable mode, if we found the end of the stream while parsing the number, do not report it
+        // to the handler yet as it might be truncated. Raise a document-truncated error.
+        if (parseFlags & kParseResumableFlag) {
+            if (s.Peek() == '\0') {
+                s.Seek(startOffset);
+                RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, s.Tell());
+            }
+        }
+        
         // Finish parsing, call event according to the type of number.
         bool cont = true;
 
