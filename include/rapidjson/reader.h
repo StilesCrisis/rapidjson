@@ -543,8 +543,7 @@ public:
             if (RAPIDJSON_UNLIKELY(IsIterativeParsingCompleteState(d))) {
                 // Report errors.
                 if (d == IterativeParsingErrorState) {
-                    HandleError(state_, is);
-                    return false;
+                    goto ErrorHandler;
                 }
             
                 // Transition to the finish state.
@@ -575,12 +574,18 @@ public:
         }
         
         // We reached the end of file.
-        if (state_ != IterativeParsingFinishState) {
-            HandleError(state_, is);
+        if (state_ == IterativeParsingFinishState)
+            return true;
+        
+        ErrorHandler: {
+            if ((parseFlags & kParseResumableFlag) && !HasParseError() && is.Peek() == '\0') {
+                RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorDocumentTruncated, is.Tell());
+            }
+            else {
+                HandleError(state_, is);
+            }
             return false;
         }
-        
-        return true;
     }
     
     //! Check if token-by-token parsing JSON text is complete
@@ -828,7 +833,7 @@ private:
     
     template<unsigned parseFlags, typename InputStream, typename Handler>
     void ParseNull(InputStream& is, Handler& handler) {
-        ConsumeWord<-'n', 'u', 'l', 'l', '\0', parseFlags, kParseErrorValueInvalid>(is);
+        ConsumeWord<-'n', 'u', 'l', 'l', 0, parseFlags, kParseErrorValueInvalid>(is);
         RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
         
         if (RAPIDJSON_UNLIKELY(!handler.Null()))
@@ -837,7 +842,7 @@ private:
 
     template<unsigned parseFlags, typename InputStream, typename Handler>
     void ParseTrue(InputStream& is, Handler& handler) {
-        ConsumeWord<-'t', 'r', 'u', 'e', '\0', parseFlags, kParseErrorValueInvalid>(is);
+        ConsumeWord<-'t', 'r', 'u', 'e', 0, parseFlags, kParseErrorValueInvalid>(is);
         RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
 
         if (RAPIDJSON_UNLIKELY(!handler.Bool(true)))
@@ -879,7 +884,6 @@ private:
                 codepoint -= 'a' - 10;
             else {
                 if ((parseFlags & kParseResumableFlag) && (c == '\0')) {
-                    RecoverResumableInputStream<parseFlags>(is, i);
                     RAPIDJSON_PARSE_ERROR_NORETURN(kParseErrorDocumentTruncated, escapeOffset);
                 }
                 else {
@@ -944,14 +948,24 @@ private:
         else {
             StackStream<typename TargetEncoding::Ch> stackStream(stack_);
             ParseStringToStream<parseFlags, SourceEncoding, TargetEncoding>(s, stackStream);
-            RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
             SizeType length = static_cast<SizeType>(stackStream.Length()) - 1;
             const typename TargetEncoding::Ch* const str = stackStream.Pop();
+            RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
             success = (isKey ? handler.Key(str, length, true) : handler.String(str, length, true));
         }
         if (RAPIDJSON_UNLIKELY(!success))
             RAPIDJSON_PARSE_ERROR(kParseErrorTermination, s.Tell());
     }
+
+#define RAPIDJSON_STRING_STREAM_EARLY_OUT                                               \
+RAPIDJSON_MULTILINEMACRO_BEGIN                                                          \
+if (RAPIDJSON_UNLIKELY(HasParseError())) {                                              \
+    if ((parseFlags & kParseResumableFlag) && parseResult_.IsResumable()) {             \
+        is.Seek(startOffset);                                                           \
+    }                                                                                   \
+    return;                                                                             \
+}                                                                                       \
+RAPIDJSON_MULTILINEMACRO_END
 
     // Parse string to an output is
     // This function handles the prefix/suffix double quotes, escaping, and optional encoding validation.
@@ -971,7 +985,7 @@ private:
 
         size_t startOffset;
         if (parseFlags & kParseResumableFlag) {
-            startOffset = is.Tell();
+            startOffset = is.Tell() - 1;
         }
         
         for (;;) {
@@ -991,21 +1005,15 @@ private:
                 else if (RAPIDJSON_LIKELY(e == 'u')) {    // Unicode
                     is.Take();
                     unsigned codepoint = ParseHex4<parseFlags>(is, escapeOffset);
-                    RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
+                    RAPIDJSON_STRING_STREAM_EARLY_OUT;
                     
                     if (RAPIDJSON_UNLIKELY(codepoint >= 0xD800 && codepoint <= 0xDBFF)) {
                         // Handle UTF-16 surrogate pair
-                        ConsumeWord<'\\', 'u', '\0', '\0', '\0', parseFlags, kParseErrorStringUnicodeSurrogateInvalid>(is);
-                        if (HasParseError()) {
-                            if ((parseFlags & kParseResumableFlag) && parseResult_.IsResumable()) {
-                                // Subtract one from the start offset to account for the open-quote.
-                                is.Seek(startOffset - 1);
-                            }
-                            return;
-                        }
+                        ConsumeWord<'\\', 'u', 0, 0, 0, parseFlags, kParseErrorStringUnicodeSurrogateInvalid>(is);
+                        RAPIDJSON_STRING_STREAM_EARLY_OUT;
                         
                         unsigned codepoint2 = ParseHex4<parseFlags>(is, escapeOffset);
-                        RAPIDJSON_PARSE_ERROR_EARLY_RETURN_VOID;
+                        RAPIDJSON_STRING_STREAM_EARLY_OUT;
                         
                         if (RAPIDJSON_UNLIKELY(codepoint2 < 0xDC00 || codepoint2 > 0xDFFF))
                             RAPIDJSON_PARSE_ERROR(kParseErrorStringUnicodeSurrogateInvalid, escapeOffset);
@@ -1014,7 +1022,7 @@ private:
                     TEncoding::Encode(os, codepoint);
                 }
                 else if ((parseFlags & kParseResumableFlag) && RAPIDJSON_UNLIKELY(e == '\0')) {
-                    is.Seek(startOffset - 1);
+                    is.Seek(startOffset);
                     RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, is.Tell());
                 }
                 else {
@@ -1030,7 +1038,7 @@ private:
                 if (c == '\0') {
                     if (parseFlags & kParseResumableFlag) {
                         // Subtract one from the start offset to account for the open-quote.
-                        is.Seek(startOffset - 1);
+                        is.Seek(startOffset);
                         RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, is.Tell());
                     }
                     RAPIDJSON_PARSE_ERROR(kParseErrorStringMissQuotationMark, is.Tell());
@@ -1340,7 +1348,7 @@ private:
                     RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, s.Tell());
             }
             else
-                RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, s.Tell());
+                RAPIDJSON_PARSE_ERROR(kParseErrorValueInvalid, s.Tell()); // FIXME: must support resuming!
         }
         else if ((parseFlags & kParseResumableFlag) && s.Peek() == '\0') {
             RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, s.Tell());
@@ -1391,9 +1399,16 @@ private:
         if (Consume(s, '.')) {
             decimalPosition = s.Length();
 
-            if (RAPIDJSON_UNLIKELY(!(s.Peek() >= '0' && s.Peek() <= '9')))
-                RAPIDJSON_PARSE_ERROR(kParseErrorNumberMissFraction, s.Tell());
-
+            if (RAPIDJSON_UNLIKELY(!(s.Peek() >= '0' && s.Peek() <= '9'))) {
+                if ((parseFlags & kParseResumableFlag) && s.Peek() == '\0') {
+                    s.Seek(startOffset);
+                    RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, s.Tell());
+                }
+                else {
+                    RAPIDJSON_PARSE_ERROR(kParseErrorNumberMissFraction, s.Tell());
+                }
+            }
+            
             if (!useDouble) {
 #if RAPIDJSON_64BIT
                 // Use i64 to store significand in 64-bit architecture
@@ -1476,11 +1491,9 @@ private:
 
         // In resumable mode, if we found the end of the stream while parsing the number, do not report it
         // to the handler yet as it might be truncated. Raise a document-truncated error.
-        if (parseFlags & kParseResumableFlag) {
-            if (s.Peek() == '\0') {
-                s.Seek(startOffset);
-                RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, s.Tell());
-            }
+        if ((parseFlags & kParseResumableFlag) && s.Peek() == '\0') {
+            s.Seek(startOffset);
+            RAPIDJSON_PARSE_ERROR(kParseErrorDocumentTruncated, s.Tell());
         }
         
         // Finish parsing, call event according to the type of number.
@@ -1871,7 +1884,7 @@ private:
         case IterativeParsingElementDelimiterState:
             is.Take();
             // Update member/element count.
-            *stack_.template Top<SizeType>() = *stack_.template Top<SizeType>() + 1;
+            *stack_.template Top<SizeType>() += 1;
             return dst;
 
         case IterativeParsingObjectFinishState:
