@@ -376,6 +376,7 @@ static void TestParseDouble() {
             d = d.Value() * 0.5;
         }
     }
+    
 #undef TEST_DOUBLE
 }
 
@@ -446,6 +447,12 @@ TEST(Reader, ParseNumber_Error) {
     }
     TEST_NUMBER_ERROR(kParseErrorNumberTooBig, "1e309", 0, 5);
 
+    // Issue #849 - Numbers too big to be stored in double
+    TEST_NUMBER_ERROR(kParseErrorNumberTooBig, "1.8e308", 0, 7);
+    TEST_NUMBER_ERROR(kParseErrorNumberTooBig, "5e308", 0, 5);
+    TEST_NUMBER_ERROR(kParseErrorNumberTooBig, "1.00e310", 0, 8);
+    TEST_NUMBER_ERROR(kParseErrorNumberTooBig, "-1.8e308", 0, 8);
+
     // Miss fraction part in number.
     TEST_NUMBER_ERROR(kParseErrorNumberMissFraction, "1.", 2, 2);
     TEST_NUMBER_ERROR(kParseErrorNumberMissFraction, "1.a", 2, 2);
@@ -453,7 +460,8 @@ TEST(Reader, ParseNumber_Error) {
     // Miss exponent in number.
     TEST_NUMBER_ERROR(kParseErrorNumberMissExponent, "1e", 2, 2);
     TEST_NUMBER_ERROR(kParseErrorNumberMissExponent, "1e_", 2, 2);
-
+    
+    
 #undef TEST_NUMBER_ERROR
 }
 
