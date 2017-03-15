@@ -422,18 +422,23 @@ TEST(Reader, ParseNumber_NormalPrecisionError) {
     printf("ULP Average = %g, Max = %g \n", ulpSum / count, ulpMax);
 }
 
+struct DoubleHandler : BaseReaderHandler<> {
+    bool Double(double d) { d_ = d; return true; }
+    double d_;
+};
+
 TEST(Reader, ParseNumber_Error) {
 #define TEST_NUMBER_ERROR(errorCode, str, errorOffset, streamPos) \
     { \
         char buffer[1001]; \
         sprintf(buffer, "%s", str); \
         InsituStringStream s(buffer); \
-        BaseReaderHandler<> h; \
+        DoubleHandler h = {}; \
         Reader reader; \
         EXPECT_FALSE(reader.Parse(s, h)); \
-        EXPECT_EQ(errorCode, reader.GetParseErrorCode());\
-        EXPECT_EQ(errorOffset, reader.GetErrorOffset());\
-        EXPECT_EQ(streamPos, s.Tell());\
+        EXPECT_EQ(errorCode, reader.GetParseErrorCode()) << h.d_; \
+        EXPECT_EQ(errorOffset, reader.GetErrorOffset()); \
+        EXPECT_EQ(streamPos, s.Tell()); \
     }
 
     // Number too big to be stored in double.
